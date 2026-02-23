@@ -16,16 +16,41 @@ import (
 
 type collectorsResponse []string
 
-type collectorOffsetsResponse struct {
+type collectorStatusResponse struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+type sourcePartition struct {
+	Cluster   string `json:"cluster"`
+	Partition int    `json:"partition"`
+	Topic     string `json:"topic"`
+}
+
+type sourceOffset struct {
+	Offset int `json:"offset"`
+}
+
+type sinkPartition struct {
+	Partition int    `json:"kafka_partition"`
+	Topic     string `json:"kafka_topic"`
+}
+
+type sinkOffset struct {
+	Offset int `json:"kafka_offset"`
+}
+
+type sourceCollectorOffsetsResponse struct {
 	Offsets []struct {
-		Partition struct {
-			Cluster   string `json:"cluster"`
-			Partition int    `json:"partition"`
-			Topic     string `json:"topic"`
-		} `json:"partition"`
-		Offset struct {
-			Offset int `json:"offset"`
-		} `json:"offset"`
+		Partition sourcePartition `json:"partition"`
+		Offset    sourceOffset    `json:"offset"`
+	} `json:"offsets"`
+}
+
+type sinkCollectorOffsetsResponse struct {
+	Offsets []struct {
+		Partition sinkPartition `json:"partition"`
+		Offset    sinkOffset    `json:"offset"`
 	} `json:"offsets"`
 }
 
@@ -74,24 +99,61 @@ func (collector *restAPICollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	for _, connector := range *response.Result().(*collectorsResponse) {
-		log.Printf("Connector: %s", connector)
 
-		response, err := collector.api.R().SetResult(&collectorOffsetsResponse{}).Get(fmt.Sprintf("/connectors/%s/offsets", connector))
+		response, err := collector.api.R().SetResult(&collectorStatusResponse{}).Get(fmt.Sprintf("/connectors/%s/status", connector))
 		if err != nil {
-			log.Printf("Error fetching offsets for connector %s: %v", connector, err)
+			log.Printf("Error fetching status for connector %s: %v", connector, err)
 			continue
 		}
-		for _, offset := range response.Result().(*collectorOffsetsResponse).Offsets {
-			ch <- prometheus.MustNewConstMetric(
-				collector.offset,
-				prometheus.GaugeValue,
-				float64(offset.Offset.Offset),
-				connector,
-				offset.Partition.Cluster,
-				offset.Partition.Topic,
-				fmt.Sprintf("%d", offset.Partition.Partition),
-			)
+		connectorStatus := response.Result().(*collectorStatusResponse)
+
+		if connectorStatus.Type == "source" {
+			collector.collectSourceOffsets(ch, connector)
+		} else if connectorStatus.Type == "sink" {
+			collector.collectSinkOffsets(ch, connector)
+		} else {
+			log.Printf("Unknown connector type for connector %s: %s", connector, connectorStatus.Type)
 		}
+	}
+}
+
+func (collector *restAPICollector) collectSourceOffsets(ch chan<- prometheus.Metric, connector string) {
+	response, err := collector.api.R().SetResult(&sourceCollectorOffsetsResponse{}).Get(fmt.Sprintf("/connectors/%s/offsets", connector))
+
+	if err != nil {
+		log.Printf("Error fetching offsets for connector %s: %v", connector, err)
+		return
+	}
+	for _, offset := range response.Result().(*sourceCollectorOffsetsResponse).Offsets {
+		ch <- prometheus.MustNewConstMetric(
+			collector.offset,
+			prometheus.GaugeValue,
+			float64(offset.Offset.Offset),
+			connector,
+			offset.Partition.Cluster,
+			offset.Partition.Topic,
+			fmt.Sprintf("%d", offset.Partition.Partition),
+		)
+	}
+}
+
+func (collector *restAPICollector) collectSinkOffsets(ch chan<- prometheus.Metric, connector string) {
+	response, err := collector.api.R().SetResult(&sinkCollectorOffsetsResponse{}).Get(fmt.Sprintf("/connectors/%s/offsets", connector))
+
+	if err != nil {
+		log.Printf("Error fetching offsets for connector %s: %v", connector, err)
+		return
+	}
+	for _, offset := range response.Result().(*sinkCollectorOffsetsResponse).Offsets {
+		ch <- prometheus.MustNewConstMetric(
+			collector.offset,
+			prometheus.GaugeValue,
+			float64(offset.Offset.Offset),
+			connector,
+			"",
+			offset.Partition.Topic,
+			fmt.Sprintf("%d", offset.Partition.Partition),
+		)
 	}
 }
 
