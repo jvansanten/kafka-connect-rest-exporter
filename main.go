@@ -128,7 +128,7 @@ func (collector *restAPICollector) collectSourceOffsets(ch chan<- prometheus.Met
 		ch <- prometheus.MustNewConstMetric(
 			collector.offset,
 			prometheus.GaugeValue,
-			float64(offset.Offset.Offset),
+			float64(offset.Offset.Offset+1), // MirrorMaker2 appears to stores the last committed offset
 			connector,
 			offset.Partition.Cluster,
 			offset.Partition.Topic,
