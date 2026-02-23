@@ -35,15 +35,26 @@ type restAPICollector struct {
 	api *resty.Client
 }
 
-func newRestAPICollector(api_url string) prometheus.Collector {
+func newRestAPICollector(api_url string) (prometheus.Collector, error) {
+
+	api := resty.New().SetBaseURL(api_url)
+
+	// Test the API connection
+	response, err := api.R().Get("/connectors")
+	if err != nil {
+		return nil, fmt.Errorf("error connecting to Kafka Connect API at %s: %v", api_url, err)
+	}
+	if response.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code from Kafka Connect API at %s: %d", api_url, response.StatusCode())
+	}
 
 	return &restAPICollector{
 		offset: prometheus.NewDesc("kafka_connect_current_offset",
 			"The current offset of the Kafka Connect connector",
 			[]string{"connector", "cluster", "topic", "partition"}, nil,
 		),
-		api: resty.New().SetBaseURL(api_url),
-	}
+		api: api,
+	}, nil
 }
 
 // Each and every collector must implement the Describe function.
@@ -91,13 +102,16 @@ func main() {
 		os.Exit(2)
 	}
 
-	_ = connectAPI
+	collector, err := newRestAPICollector(connectAPI)
+	if err != nil {
+		log.Fatalf("Error creating REST API collector: %v", err)
+	}
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		newRestAPICollector(connectAPI),
+		collector,
 	)
 
 	http.Handle("/metrics", handlers.LoggingHandler(os.Stdout, promhttp.HandlerFor(reg, promhttp.HandlerOpts{})))
